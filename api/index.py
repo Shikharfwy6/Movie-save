@@ -27,19 +27,20 @@ try:
 except Exception as e:
     print(f"URI Parsing Error: {e}")
 
-# --- डेटाबेस और बॉट सेटअप ---
+# --- डेटाबेस सेटअप ---
 db_client = MongoClient(MONGO_URI)
 db = db_client["telegram_bot_db"]
 videos_collection = db["saved_videos"]
 
-# यहाँ workers=1 कर दिया है ताकि Python 3.12 का ThreadPoolExecutor क्रैश न हो
-app = Client("my_vercel_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
+# ⚠️ एरर फिक्स: हमने वेरिएबल का नाम 'app' से बदलकर 'bot_client' कर दिया है
+# ताकि वर्सेल इसे Flask या ASGI ऐप समझने की भूल न करे
+bot_client = Client("my_vercel_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
 
 # --- बॉट का मुख्य लॉजिक (Async Functions) ---
 async def handle_telegram_update(update_dict):
-    await app.start()
+    await bot_client.start()
     try:
-        update = Update.read(app, update_dict)
+        update = Update.read(bot_client, update_dict)
         message = update.message
         
         if not message:
@@ -58,7 +59,7 @@ async def handle_telegram_update(update_dict):
             }
             videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
 
-        # 2.团 ग्रुप में कीवर्ड सर्च करना
+        # 2. ग्रुप में कीवर्ड सर्च करना
         elif message.chat and message.chat.type in ["group", "supergroup"] and message.text:
             user_query = message.text.strip()
             if len(user_query) >= 3:
@@ -75,9 +76,10 @@ async def handle_telegram_update(update_dict):
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
     finally:
-        await app.stop()
+        await bot_client.stop()
 
 # --- वर्सेल सर्वरलेस हैंडलर (HTTP Server) ---
+# ⚠️ वर्सेल इसी 'handler' क्लास को खोजता है, ऐप को नहीं
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
