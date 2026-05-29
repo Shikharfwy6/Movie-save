@@ -1,20 +1,19 @@
 import os
 import re
 import asyncio
+import requests
 from json import loads
-from pyrogram import Client
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 from http.server import BaseHTTPRequestHandler
 import urllib.parse
 
 # --- Environment Variables ---
-API_ID = int(os.environ.get("API_ID"))
+API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "moviegiver918_bot")
-OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+OWNER_ID = os.environ.get("OWNER_ID", "0")
 
 # --- MongoDB Password Auto-Fix ---
 try:
@@ -33,20 +32,22 @@ db_client = MongoClient(MONGO_URI)
 db = db_client["telegram_bot_db"]
 videos_collection = db["saved_videos"]
 
-# Vercel-Optimized Pyrogram Client
-bot_client = Client("my_vercel_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1, in_memory=True)
+# --- टेलीग्राम API को सीधे बिना किसी लाइब्रेरी के मैसेज भेजने का सबसे पक्का तरीका ---
+def telegram_api_request(method, payload):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        return response.json()
+    except Exception as e:
+        print(f"Telegram API Error: {e}")
+        return None
 
-# --- सहायक फ़ंक्शन (Telegram पर लॉग भेजने के लिए) ---
-async def send_log_to_owner(text):
-    if OWNER_ID != 0:
-        try:
-            await bot_client.send_message(chat_id=OWNER_ID, text=text)
-        except Exception as e:
-            print(f"Log sending failed: {e}")
+def send_log_to_owner(text):
+    if OWNER_ID != "0":
+        telegram_api_request("sendMessage", {"chat_id": int(OWNER_ID), "text": text})
 
-# --- Main Bot Logic ---
-async def handle_telegram_update(update_dict):
-    await bot_client.start()
+# --- Main Bot Logic (बिना पायरोग्राम क्रैश के सीधे सर्वरलेस मोड) ---
+def handle_telegram_update(update_dict):
     try:
         # 1. पर्सनल मैसेज और ग्रुप मैसेज को हैंडल करना
         if "message" in update_dict:
@@ -64,22 +65,17 @@ async def handle_telegram_update(update_dict):
                         v_id = int(text.split("video_id_")[1])
                         saved_video = videos_collection.find_one({"video_id": v_id})
                         if saved_video:
-                            # यूजर को वीडियो मैसेज फॉरवर्ड करना या लिंक देना
-                            await bot_client.send_message(
-                                chat_id=chat_id,
-                                text=f"🍿 **आपकी मांगी गई वीडियो तैयार है!**\n\n📝 **कैप्शन:** {saved_video['caption']}\n\nयह वीडियो हमारे डेटाबेस से सुरक्षित खोजी गई है।"
-                            )
-                            await send_log_to_owner(f"👤 यूजर [{first_name}](tg://user?id={chat_id}) ने वीडियो ID `{v_id}` को एक्सेस किया।")
+                            reply_text = f"🍿 **आपकी मांगी गई वीडियो तैयार है!**\n\n📝 **कैप्शन:** {saved_video['caption']}\n\nयह वीडियो हमारे डेटाबेस से सुरक्षित खोजी गई है।"
+                            telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
+                            send_log_to_owner(f"👤 यूजर {first_name} (ID: {chat_id}) ने वीडियो ID {v_id} को निकाला।")
                         else:
-                            await bot_client.send_message(chat_id=chat_id, text="❌ क्षमा करें! यह वीडियो हमारे डेटाबेस में नहीं मिली।")
+                            telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ क्षमा करें! यह वीडियो हमारे डेटाबेस में नहीं मिली।"})
                     except Exception as e:
-                        await bot_client.send_message(chat_id=chat_id, text="❌ लिंक अमान्य है।")
+                        telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ लिंक अमान्य है।"})
                 else:
                     # साधारण /start रिस्पॉन्स
-                    await bot_client.send_message(
-                        chat_id=chat_id,
-                        text=f"👋 हेलो {first_name}!\n\n🤖 मैं एक **ऑटोमैटिक मूवी सेव बॉट** हूँ।\n\n🟢 **बॉट स्थिति:** एक्टिव और चालू है!\n✨ **मेरा काम:** जब भी हमारे चैनल में कोई वीडियो अपलोड होगी, मैं उसे डेटाबेस में सुरक्षित रख लूँगा और आपके ग्रुप में कीवर्ड सर्च करने पर तुरंत निकाल कर दे दूँगा।"
-                    )
+                    reply_text = f"👋 हेलो {first_name}!\n\n🤖 मैं एक **ऑटोमैटिक मूवी सेव बॉट** हूँ।\n\n🟢 **बॉट स्थिति:** एक्टिव और चालू है!\n✨ **मेरा काम:** जब भी हमारे चैनल में कोई video अपलोड होगी, मैं उसे डेटाबेस में सुरक्षित रख लूँगा।"
+                    telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
                 return
 
             # 🅱️ ग्रुप में कीवर्ड सर्च करना
@@ -89,15 +85,17 @@ async def handle_telegram_update(update_dict):
                 
                 buttons = []
                 for movie in results:
-                    buttons.append([InlineKeyboardButton(text=movie["caption"], url=movie["link"])])
+                    buttons.append([{"text": movie["caption"], "url": movie["link"]}])
                 
                 if buttons:
-                    await bot_client.send_message(
-                        chat_id=chat_id,
-                        text=f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:",
-                        reply_markup=InlineKeyboardMarkup(buttons),
-                        reply_to_message_id=msg_id
-                    )
+                    payload = {
+                        "chat_id": chat_id,
+                        "text": f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:",
+                        "reply_markup": {"inline_keyboard": buttons},
+                        "reply_to_message_id": msg_id,
+                        "parse_mode": "Markdown"
+                    }
+                    telegram_api_request("sendMessage", payload)
                 return
 
         # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग)
@@ -118,22 +116,21 @@ async def handle_telegram_update(update_dict):
                 # MongoDB में डेटा इन्सर्ट करना
                 videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
                 
-                # 📢 लाइव टेलीग्राम लॉग सीधे आपको मिलेगा
+                # लाइव लॉग टेलीग्राम पर भेजना
                 log_message = (
                     f"📢 **बॉट लाइव लॉग रिपोर्ट** 📢\n\n"
                     f"✅ **डेटाबेस स्थिति:** सफलतापूर्वक सेव हुआ (MongoDB)\n"
                     f"📺 **चैनल का नाम:** {channel_title}\n"
-                    f"🆔 **वीडियो संदेश ID:** `{video_id}`\n"
-                    f"📝 **कैप्शन:** `{caption}`\n\n"
+                    f"🆔 **वीडियो संदेश ID:** {video_id}\n"
+                    f"📝 **कैप्शन:** {caption}\n\n"
                     f"🔗 **बॉट जनरेटेड लिंक:** {bot_start_link}"
                 )
-                await send_log_to_owner(log_message)
+                send_log_to_owner(log_message)
                 return
 
     except Exception as e:
-        await send_log_to_owner(f"⚠️ **बॉट के अंदर एरर आया:**\n`{str(e)}`")
-    finally:
-        await bot_client.stop()
+        print(f"Error in handler logic: {e}")
+        send_log_to_owner(f"⚠️ **बॉट के अंदर एरर आया:**\n`{str(e)}`")
 
 # --- Vercel Serverless HTTP Handler ---
 class handler(BaseHTTPRequestHandler):
@@ -142,10 +139,8 @@ class handler(BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length)
         try:
             update_dict = loads(post_data.decode('utf-8'))
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(handle_telegram_update(update_dict))
-            loop.close()
+            # डायरेक्ट फंक्शन कॉल (बिना अटके हुए एसिंक लूप के)
+            handle_telegram_update(update_dict)
         except Exception as e:
             print(f"POST Handler Error: {e}")
             
