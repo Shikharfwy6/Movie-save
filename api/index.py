@@ -13,17 +13,34 @@ API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
-
-# ⚠️ यहाँ आपका नया यूजरनेम डिफॉल्ट सेट कर दिया है
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "moviegiver918_bot")
+
+# --- पासवर्ड को ऑटो-फिक्स करने का लॉजिक ---
+try:
+    if "@" in MONGO_URI and "://" in MONGO_URI:
+        scheme, rest = MONGO_URI.split("://", 1)
+        user_pass, host_part = rest.split("@", 1)
+        if ":" in user_pass:
+            username, password = user_pass.split(":", 1)
+            encoded_password = urllib.parse.quote_plus(password)
+            MONGO_URI = f"{scheme}://{username}:{encoded_password}@{host_part}"
+except Exception as e:
+    print(f"URI Parsing Error: {e}")
 
 # --- डेटाबेस सेटअप ---
 db_client = MongoClient(MONGO_URI)
 db = db_client["telegram_bot_db"]
 videos_collection = db["saved_videos"]
 
-# Pyrogram क्लाइंट सेटअप
-bot_client = Client("my_vercel_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
+# ⚠️ एरर फिक्स: यहाँ in_memory=True जोड़ दिया गया है
+bot_client = Client(
+    "my_vercel_bot", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN, 
+    workers=1,
+    in_memory=True
+)
 
 # --- बॉट का मुख्य लॉजिक (Async Function) ---
 async def handle_telegram_update(update_dict):
@@ -78,7 +95,6 @@ class handler(BaseHTTPRequestHandler):
         try:
             update_dict = loads(post_data.decode('utf-8'))
             
-            # वर्सेल के लिए फ्रेश इवेंट लूप मैनेजमेंट
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(handle_telegram_update(update_dict))
