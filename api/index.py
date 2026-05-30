@@ -13,7 +13,6 @@ API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
-# Yahan aapka naya bot username default set kar diya hai
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
 
@@ -70,18 +69,27 @@ def handle_telegram_update(update_dict):
 
             # 🅰️ पर्सनल मैसेज में /start कमांड
             if chat_type == "private" and text.startswith("/start"):
-                if "video_id_" in text:
-                    try:
-                        v_id = int(text.split("video_id_")[1])
-                        saved_video = videos_collection.find_one({"video_id": v_id})
-                        if saved_video:
-                            reply_text = f"🍿 **आपकी मांगी गई वीडियो तैयार है!**\n\n📝 **कैप्शन:** {saved_video['caption']}\n\nयह वीडियो हमारे डेटाबेस से सुरक्षित खोजी गई है।"
-                            telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
-                            send_log_to_owner(f"👤 यूजर {first_name} (ID: {chat_id}) ने वीडियो ID {v_id} को निकाला।")
-                        else:
-                            telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ क्षमा करें! यह वीडियो हमारे डेटाबेस में नहीं मिली।"})
-                    except Exception as e:
-                        telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ लिंक अमान्य है।"})
+                args = text.split(" ", 1)
+                if len(args) > 1:
+                    start_param = args[1] # Yeh `{video_id}_4` poora nikaalega
+                    
+                    # Check karega ki parameter ke end mein `_4` laga hai ya nahi
+                    if start_param.endswith("_4"):
+                        try:
+                            # `_4` ko hatakar sirf original video_id nikalna
+                            v_id = int(start_param.split("_4")[0])
+                            
+                            saved_video = videos_collection.find_one({"video_id": v_id})
+                            if saved_video:
+                                reply_text = f"🍿 **आपकी मांगी गई वीडियो तैयार है!**\n\n📝 **कैप्शन:** {saved_video['caption']}\n\nयह वीडियो हमारे डेटाबेस से सुरक्षित खोजी गई है।"
+                                telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
+                                send_log_to_owner(f"👤 यूजर {first_name} (ID: {chat_id}) ने वीडियो ID {v_id} को निकाला।")
+                            else:
+                                telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ क्षमा करें! यह वीडियो हमारे डेटाबेस में नहीं मिली।"})
+                        except Exception as e:
+                            telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ लिंक अमान्य है।"})
+                    else:
+                        telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ लिंक का फॉर्मेट सही नहीं है।"})
                 else:
                     # साधारण /start रिस्पॉन्स
                     reply_text = f"👋 हेलो {first_name}!\n\n🤖 मैं एक **ऑटोमैटिक मूवी सेव बॉट** हूँ।\n\n🟢 **बॉट स्थिति:** एक्टिव और चालू है!\n✨ **मेरा काम:** जब भी हमारे चैनल में कोई video अपलोड होगी, मैं उसे डेटाबेस में सुरक्षित रख लूँगा।"
@@ -107,7 +115,6 @@ def handle_telegram_update(update_dict):
                     }
                     bot_reply = telegram_api_request("sendMessage", payload)
                     
-                    # Agar message successfully send ho jaye toh uski message_id nikal kar delete timer chalao
                     if bot_reply and bot_reply.get("ok"):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
@@ -121,8 +128,8 @@ def handle_telegram_update(update_dict):
                 caption = channel_post.get("caption", "No Caption")
                 channel_title = channel_post.get("chat", {}).get("title", "चैनल")
                 
-                # Ab naya username `Getvideo81827_bot` is link mein use hoga
-                bot_start_link = f"https://t.me/{BOT_USERNAME}?start=video_id_{video_id}"
+                # Naya link format: video_id ke baad default _4 jod diya hai
+                bot_start_link = f"https://t.me/{BOT_USERNAME}?start={video_id}_4"
                 video_data = {
                     "video_id": video_id,
                     "caption": caption,
@@ -150,7 +157,6 @@ def handle_telegram_update(update_dict):
             message_ids = deletion_data.get("message_ids", [])
             
             for m_id in message_ids:
-                # Database check karega agar ye video_id exist karti hai toh use delete kar dega
                 result = videos_collection.delete_one({"video_id": m_id})
                 if result.deleted_count > 0:
                     send_log_to_owner(f"🗑️ **चैनल से डिलीट लॉग:**\nवीडियो ID `{m_id}` को चैनल से हटा दिया गया था, इसलिए इसे डेटाबेस से भी साफ़ कर दिया गया है।")
