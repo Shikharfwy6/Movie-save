@@ -6,13 +6,14 @@ from json import loads
 from pymongo import MongoClient
 from http.server import BaseHTTPRequestHandler
 import urllib.parse
+from threading import Timer  # Group messages ko 15s baad delete karne ke liye
 
 # --- Environment Variables ---
 API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "moviegiver918_bot")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
 
 # --- MongoDB Password Auto-Fix ---
@@ -46,6 +47,14 @@ def send_log_to_owner(text):
     if OWNER_ID != "0":
         telegram_api_request("sendMessage", {"chat_id": int(OWNER_ID), "text": text})
 
+# --- Auto-Delete Function (For Group Messages) ---
+def delete_message_after_delay(chat_id, message_id, delay=15):
+    def delete_action():
+        telegram_api_request("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+    
+    # 15 seconds ka timer background mein chalega bina server block kiye
+    Timer(delay, delete_action).start()
+
 # --- Main Bot Logic (बिना पायरोग्राम क्रैश के सीधे सर्वरलेस मोड) ---
 def handle_telegram_update(update_dict):
     try:
@@ -78,7 +87,7 @@ def handle_telegram_update(update_dict):
                     telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
                 return
 
-            # 🅱️ ग्रुप में कीवर्ड सर्च करना
+            # 🅱️ ग्रुप में कीवर्ड सर्च करना (और 15 सेकंड बाद डिलीट करना)
             if chat_type in ["group", "supergroup"] and text and len(text) >= 3:
                 search_pattern = re.compile(re.escape(text), re.IGNORECASE)
                 results = videos_collection.find({"caption": search_pattern})
@@ -90,12 +99,17 @@ def handle_telegram_update(update_dict):
                 if buttons:
                     payload = {
                         "chat_id": chat_id,
-                        "text": f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:",
+                        "text": f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:\n\n⚠️ *यह मैसेज 15 सेकंड में डिलीट हो जाएगा!*",
                         "reply_markup": {"inline_keyboard": buttons},
                         "reply_to_message_id": msg_id,
                         "parse_mode": "Markdown"
                     }
-                    telegram_api_request("sendMessage", payload)
+                    bot_reply = telegram_api_request("sendMessage", payload)
+                    
+                    # Agar message successfully send ho jaye toh uski message_id nikal kar delete timer chalao
+                    if bot_reply and bot_reply.get("ok"):
+                        bot_msg_id = bot_reply["result"]["message_id"]
+                        delete_message_after_delay(chat_id, bot_msg_id, 15)
                 return
 
         # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग)
@@ -123,10 +137,22 @@ def handle_telegram_update(update_dict):
                     f"📺 **चैनल का नाम:** {channel_title}\n"
                     f"🆔 **वीडियो संदेश ID:** {video_id}\n"
                     f"📝 **कैप्शन:** {caption}\n\n"
-                    f"🔗 **बॉट जनरेटेड लिंक:** {bot_start_link}"
+                    f"🔗 **बॉट जनरेटेड校 लिंक:** {bot_start_link}"
                 )
                 send_log_to_owner(log_message)
                 return
+
+        # 3. चैनल से पोस्ट डिलीट होने पर डेटाबेस से साफ करना
+        if "deleted_chat_messages" in update_dict:
+            deletion_data = update_dict["deleted_chat_messages"]
+            message_ids = deletion_data.get("message_ids", [])
+            
+            for m_id in message_ids:
+                # Database check karega agar ye video_id exist karti hai toh use delete kar dega
+                result = videos_collection.delete_one({"video_id": m_id})
+                if result.deleted_count > 0:
+                    send_log_to_owner(f"🗑️ **चैनल से डिलीट लॉग:**\nवीडियो ID `{m_id}` को चैनल से हटा दिया गया था, इसलिए इसे डेटाबेस से भी साफ़ कर दिया गया है।")
+            return
 
     except Exception as e:
         print(f"Error in handler logic: {e}")
@@ -139,7 +165,6 @@ class handler(BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length)
         try:
             update_dict = loads(post_data.decode('utf-8'))
-            # डायरेक्ट फंक्शन कॉल (बिना अटके हुए एसिंक लूप के)
             handle_telegram_update(update_dict)
         except Exception as e:
             print(f"POST Handler Error: {e}")
@@ -154,3 +179,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Bot is running via Webhook!")
+        
