@@ -15,6 +15,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
+# Naya group jahan unavailable keywords ki report jayegi
+LOG_GROUP_ID = os.environ.get("LOG_GROUP_ID", "0") 
 
 # --- MongoDB Password Auto-Fix ---
 try:
@@ -66,17 +68,16 @@ def handle_telegram_update(update_dict):
             text = message.get("text", "").strip()
             msg_id = message.get("message_id")
             first_name = message.get("from", {}).get("first_name", "User")
+            username = message.get("from", {}).get("username", "No_Username")
 
             # 🅰️ पर्सनल मैसेज में /start कमांड
             if chat_type == "private" and text.startswith("/start"):
                 args = text.split(" ", 1)
                 if len(args) > 1:
-                    start_param = args[1] # Yeh `{video_id}_4` poora nikaalega
+                    start_param = args[1]
                     
-                    # Check karega ki parameter ke end mein `_4` laga hai ya nahi
                     if start_param.endswith("_4"):
                         try:
-                            # `_4` ko hatakar sirf original video_id nikalna
                             v_id = int(start_param.split("_4")[0])
                             
                             saved_video = videos_collection.find_one({"video_id": v_id})
@@ -91,7 +92,6 @@ def handle_telegram_update(update_dict):
                     else:
                         telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ लिंक का फॉर्मेट सही नहीं है।"})
                 else:
-                    # साधारण /start रिस्पॉन्स
                     reply_text = f"👋 हेलो {first_name}!\n\n🤖 मैं एक **ऑटोमैटिक मूवी सेव बॉट** हूँ।\n\n🟢 **बॉट स्थिति:** एक्टिव और चालू है!\n✨ **मेरा काम:** जब भी हमारे चैनल में कोई video अपलोड होगी, मैं उसे डेटाबेस में सुरक्षित रख लूँगा।"
                     telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
                 return
@@ -120,7 +120,7 @@ def handle_telegram_update(update_dict):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
                 else:
-                    # Case 2: Agar keyword database mein nahi milta (Grammar correct reply)
+                    # Case 2: Agar keyword database mein nahi milta
                     not_found_text = (
                         f"❌ **This is not available right now.**\n"
                         f"Thanks for your reminder, it will be added within 24 hours! ⏱️\n\n"
@@ -134,10 +134,20 @@ def handle_telegram_update(update_dict):
                     }
                     bot_reply = telegram_api_request("sendMessage", payload)
                     
-                    # Yeh negative message bhi 15s baad delete ho jayega
                     if bot_reply and bot_reply.get("ok"):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
+                    
+                    # --- Naya Feature: Unavailable keyword ko alag group mein bhejna ---
+                    if LOG_GROUP_ID != "0":
+                        group_name = message.get("chat", {}).get("title", "Unknown Group")
+                        keyword_report = (
+                            f"🔍 **Naya Unavailable Keyword!**\n\n"
+                            f"📝 **Keyword:** `{text}`\n"
+                            f"👥 **Group:** {group_name} (ID: `{chat_id}`)\n"
+                            f"👤 **User:** {first_name} (@{username})"
+                        )
+                        telegram_api_request("sendMessage", {"chat_id": int(LOG_GROUP_ID), "text": keyword_report, "parse_mode": "Markdown"})
                 return
 
         # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग)
@@ -155,10 +165,8 @@ def handle_telegram_update(update_dict):
                     "link": bot_start_link
                 }
                 
-                # MongoDB में डेटा इन्सर्ट करना
                 videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
                 
-                # लाइव लॉग टेलीग्राम पर भेजना
                 log_message = (
                     f"📢 **बॉट लाइव लॉग रिपोर्ट** 📢\n\n"
                     f"✅ **डेटाबेस स्थिति:** सफलतापूर्वक सेव हुआ (MongoDB)\n"
