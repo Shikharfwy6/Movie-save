@@ -106,6 +106,7 @@ def handle_telegram_update(update_dict):
                     buttons.append([{"text": movie["caption"], "url": movie["link"]}])
                 
                 if buttons:
+                    # Case 1: Agar files mil jati hain
                     payload = {
                         "chat_id": chat_id,
                         "text": f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:\n\n⚠️ *यह मैसेज 15 सेकंड में डिलीट हो जाएगा!*",
@@ -115,6 +116,25 @@ def handle_telegram_update(update_dict):
                     }
                     bot_reply = telegram_api_request("sendMessage", payload)
                     
+                    if bot_reply and bot_reply.get("ok"):
+                        bot_msg_id = bot_reply["result"]["message_id"]
+                        delete_message_after_delay(chat_id, bot_msg_id, 15)
+                else:
+                    # Case 2: Agar keyword database mein nahi milta (Grammar correct reply)
+                    not_found_text = (
+                        f"❌ **This is not available right now.**\n"
+                        f"Thanks for your reminder, it will be added within 24 hours! ⏱️\n\n"
+                        f"⚠️ *This message will auto-delete in 15 seconds.*"
+                    )
+                    payload = {
+                        "chat_id": chat_id,
+                        "text": not_found_text,
+                        "reply_to_message_id": msg_id,
+                        "parse_mode": "Markdown"
+                    }
+                    bot_reply = telegram_api_request("sendMessage", payload)
+                    
+                    # Yeh negative message bhi 15s baad delete ho jayega
                     if bot_reply and bot_reply.get("ok"):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
@@ -128,7 +148,6 @@ def handle_telegram_update(update_dict):
                 caption = channel_post.get("caption", "No Caption")
                 channel_title = channel_post.get("chat", {}).get("title", "चैनल")
                 
-                # Naya link format: video_id ke baad default _4 jod diya hai
                 bot_start_link = f"https://t.me/{BOT_USERNAME}?start={video_id}_4"
                 video_data = {
                     "video_id": video_id,
