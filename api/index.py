@@ -16,7 +16,7 @@ MONGO_URI = os.environ.get("MONGO_URI")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
 LOG_GROUP_ID = os.environ.get("LOG_GROUP_ID", "0") 
-# Naya Variable: Dusra channel jahan thumbnail aur promotion text jayega
+# Promotion channel ID (Make sure it starts with -100 like -100xxxxxxxxx)
 PROMO_CHANNEL_ID = os.environ.get("PROMO_CHANNEL_ID", "0") 
 
 # --- MongoDB Password Auto-Fix ---
@@ -44,7 +44,7 @@ def telegram_api_request(method, payload):
         return response.json()
     except Exception as e:
         print(f"Telegram API Error: {e}")
-        return None
+        return {"ok": False, "description": str(e)}
 
 def send_log_to_owner(text):
     if OWNER_ID != "0":
@@ -58,7 +58,7 @@ def delete_message_after_delay(chat_id, message_id, delay=15):
     # 15 seconds ka timer background mein chalega bina server block kiye
     Timer(delay, delete_action).start()
 
-# --- Main Bot Logic (बिना पायरोग्राम क्रैश के सीधे सर्वरलेस मोड) ---
+# --- Main Bot Logic ---
 def handle_telegram_update(update_dict):
     try:
         # 1. पर्सनल मैसेज और ग्रुप मैसेज को हैंडल करना
@@ -107,7 +107,6 @@ def handle_telegram_update(update_dict):
                     buttons.append([{"text": movie["caption"], "url": movie["link"]}])
                 
                 if buttons:
-                    # Case 1: Agar files mil jati hain
                     payload = {
                         "chat_id": chat_id,
                         "text": f"🔍 आपके कीवर्ड **'{text}'** के लिए ये वीडियो मिले हैं:\n\n⚠️ *यह मैसेज 15 सेकंड में डिलीट हो जाएगा!*",
@@ -121,7 +120,6 @@ def handle_telegram_update(update_dict):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
                 else:
-                    # Case 2: Agar keyword database mein nahi milta
                     not_found_text = (
                         f"❌ **This is not available right now.**\n"
                         f"Thanks for your reminder, it will be added within 24 hours! ⏱️\n\n"
@@ -139,7 +137,6 @@ def handle_telegram_update(update_dict):
                         bot_msg_id = bot_reply["result"]["message_id"]
                         delete_message_after_delay(chat_id, bot_msg_id, 15)
                     
-                    # --- Unavailable keyword ko alag group mein bhejna ---
                     if LOG_GROUP_ID != "0":
                         group_name = message.get("chat", {}).get("title", "Unknown Group")
                         keyword_report = (
@@ -151,7 +148,7 @@ def handle_telegram_update(update_dict):
                         telegram_api_request("sendMessage", {"chat_id": int(LOG_GROUP_ID), "text": keyword_report, "parse_mode": "Markdown"})
                 return
 
-        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग और प्रमोशन चैनल पर फॉरवर्ड करना)
+        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग)
         if "channel_post" in update_dict:
             channel_post = update_dict["channel_post"]
             if "video" in channel_post:
@@ -167,19 +164,21 @@ def handle_telegram_update(update_dict):
                     "link": bot_start_link
                 }
                 
-                # MongoDB me data store kiya
+                # MongoDB में डाटा स्टोर किया
                 videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
                 
-                # --- NAYA FEATURE: Dusre Channel me Thumbnail aur Text Bhejna ---
-                if PROMO_CHANNEL_ID != "0":
+                # --- PROMOTION POST LOGIC WITH ERROR TRACKING ---
+                promo_status = "⚠️ Not Attempted (PROMO_CHANNEL_ID not set)"
+                
+                if PROMO_CHANNEL_ID != "0" and PROMO_CHANNEL_ID != "":
                     promo_text = (
                         f"{caption}\n\n"
-                        f"Go and send this movie name in this group to watch\n"
+                        f"Go and send this video name in this group to watch\n"
                         f"👇👇👇👇👇👇👇👇👇👇👇👇👇\n"
                         f"https://t.me/new_movie_link_play"
                     )
                     
-                    # Agar video me thumbnail exist karta hai to use nikalenge
+                    # Thumbnail nikalne ki koshish
                     thumbnail_file_id = None
                     if "thumbnail" in video_obj:
                         thumbnail_file_id = video_obj["thumbnail"].get("file_id")
@@ -187,29 +186,35 @@ def handle_telegram_update(update_dict):
                         thumbnail_file_id = video_obj["thumb"].get("file_id")
                         
                     if thumbnail_file_id:
-                        # Thumbnail ko photo ke roop me dusre channel par bhejege
                         promo_payload = {
                             "chat_id": int(PROMO_CHANNEL_ID),
                             "photo": thumbnail_file_id,
                             "caption": promo_text
                         }
-                        telegram_api_request("sendPhoto", promo_payload)
+                        api_res = telegram_api_request("sendPhoto", promo_payload)
                     else:
-                        # Backup: Agar kisi wajah se thumbnail na mile, to simple text send ho jaye
                         promo_payload = {
                             "chat_id": int(PROMO_CHANNEL_ID),
                             "text": promo_text
                         }
-                        telegram_api_request("sendMessage", promo_payload)
-                
-                # Owner ko status log bhejna
+                        api_res = telegram_api_request("sendMessage", promo_payload)
+                    
+                    # Check Telegram API response
+                    if api_res and api_res.get("ok"):
+                        promo_status = "✅ Successfully Sent to Promotion Channel!"
+                    else:
+                        error_desc = api_res.get("description", "Unknown Error") if api_res else "No Response from API"
+                        promo_status = f"❌ Failed! Reason: {error_desc}\n📌 Check if Bot is Admin in Promo Channel and ID is correct ({PROMO_CHANNEL_ID})."
+
+                # Successful log message containing the promotion report
                 log_message = (
                     f"📢 **बॉट लाइव लॉग रिपोर्ट** 📢\n\n"
                     f"✅ **डेटाबेस स्थिति:** सफलतापूर्वक सेव हुआ (MongoDB)\n"
                     f"📺 **चैनल का नाम:** {channel_title}\n"
                     f"🆔 **वीडियो संदेश ID:** {video_id}\n"
-                    f"📝 **कैप्शन:** {caption}\n\n"
-                    f"🔗 **बॉट जनरेटेड लिंक:** {bot_start_link}"
+                    f"📝 **कैप्शन:** {caption}\n"
+                    f"🔗 **बॉट जनरेटेड लिंक:** {bot_start_link}\n\n"
+                    f"📊 **PROMOTION CHANNEL STATUS:**\n{promo_status}"
                 )
                 send_log_to_owner(log_message)
                 return
@@ -250,4 +255,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Bot is running via Webhook!")
-        
