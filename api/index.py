@@ -13,6 +13,7 @@ API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
+# Yahan aapka naya bot username default set kar diya hai
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
 
@@ -120,6 +121,7 @@ def handle_telegram_update(update_dict):
                 caption = channel_post.get("caption", "No Caption")
                 channel_title = channel_post.get("chat", {}).get("title", "चैनल")
                 
+                # Ab naya username `Getvideo81827_bot` is link mein use hoga
                 bot_start_link = f"https://t.me/{BOT_USERNAME}?start=video_id_{video_id}"
                 video_data = {
                     "video_id": video_id,
@@ -137,7 +139,7 @@ def handle_telegram_update(update_dict):
                     f"📺 **चैनल का नाम:** {channel_title}\n"
                     f"🆔 **वीडियो संदेश ID:** {video_id}\n"
                     f"📝 **कैप्शन:** {caption}\n\n"
-                    f"🔗 **बॉट जनरेटेड校 लिंक:** {bot_start_link}"
+                    f"🔗 **बॉट जनरेटेड लिंक:** {bot_start_link}"
                 )
                 send_log_to_owner(log_message)
                 return
@@ -179,4 +181,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Bot is running via Webhook!")
-        
