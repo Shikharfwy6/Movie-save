@@ -102,7 +102,7 @@ def handle_telegram_update(update_dict):
                             if saved_video:
                                 reply_text = f"🍿 **आपकी मांगी गई वीडियो तैयार है!**\n\n📝 **कैप्शन:** {saved_video['caption']}\n\nयह वीडियो हमारे डेटाबेस से सुरक्षित खोजी गई है।"
                                 telegram_api_request("sendMessage", {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"})
-                                send_log_to_owner(f"👤 यूजर {first_name} (ID: {chat_id}) ने वीडियो ID {v_id} को निकाला।")
+                                send_log_to_owner(f"👤 USER {first_name} (ID: {chat_id}) ने वीडियो ID {v_id} को निकाला।")
                             else:
                                 telegram_api_request("sendMessage", {"chat_id": chat_id, "text": "❌ क्षमा करें! यह वीडियो हमारे डेटाबेस में नहीं मिली।"})
                         except Exception as e:
@@ -165,7 +165,7 @@ def handle_telegram_update(update_dict):
                         telegram_api_request("sendMessage", {"chat_id": int(LOG_GROUP_ID), "text": keyword_report, "parse_mode": "Markdown"})
                 return
 
-        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग और रियल थंबनेल शेयरिंग)
+        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग और ओरिजिनल पोस्टर शेयरिंग)
         if "channel_post" in update_dict:
             channel_post = update_dict["channel_post"]
             if "video" in channel_post:
@@ -184,7 +184,7 @@ def handle_telegram_update(update_dict):
                 # MongoDB में डाटा स्टोर किया
                 videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
                 
-                # --- PROMOTION POST LOGIC (REAL PHOTO UPLOAD) ---
+                # --- PROMOTION POST LOGIC (REAL ORIGINAL POSTER UPLOAD) ---
                 promo_status = "⚠️ Not Attempted (PROMO_CHANNEL_ID not set)"
                 
                 if PROMO_CHANNEL_ID != "0" and PROMO_CHANNEL_ID != "":
@@ -195,16 +195,28 @@ def handle_telegram_update(update_dict):
                         f"https://t.me/new_movie_link_play"
                     )
                     
-                    # Thumbnail ki file_id nikalna
+                    # --- FIXED: Sabse high resolution wala original thumbnail select karna ---
                     thumbnail_file_id = None
+                    
+                    # 1. Check if it's an array of thumbnails (Telegram sends multiple sizes)
                     if "thumbnail" in video_obj:
-                        thumbnail_file_id = video_obj["thumbnail"].get("file_id")
-                    elif "thumb" in video_obj:
-                        thumbnail_file_id = video_obj["thumb"].get("file_id")
-                        
+                        thumb_data = video_obj["thumbnail"]
+                        if isinstance(thumb_data, list) and len(thumb_data) > 0:
+                            thumbnail_file_id = thumb_data[-1].get("file_id") # Last item is highest resolution
+                        elif isinstance(thumb_data, dict):
+                            thumbnail_file_id = thumb_data.get("file_id")
+                            
+                    # 2. Fallback to old keys if array logic isn't populated
+                    if not thumbnail_file_id and "thumb" in video_obj:
+                        thumb_data = video_obj["thumb"]
+                        if isinstance(thumb_data, list) and len(thumb_data) > 0:
+                            thumbnail_file_id = thumb_data[-1].get("file_id")
+                        elif isinstance(thumb_data, dict):
+                            thumbnail_file_id = thumb_data.get("file_id")
+
                     photo_bytes = None
                     if thumbnail_file_id:
-                        # Telegram server se image bytes download karna (No local save)
+                        # Direct telegram server se byte extraction
                         photo_bytes = download_telegram_file(thumbnail_file_id)
 
                     if photo_bytes:
@@ -213,10 +225,9 @@ def handle_telegram_update(update_dict):
                             "caption": promo_text
                         }
                         files = {"photo": ("thumbnail.jpg", photo_bytes, "image/jpeg")}
-                        # Raw bytes ko direct multipart form-data ke roop me bhejna
                         api_res = telegram_api_request("sendPhoto", promo_payload, files=files)
                     else:
-                        # Fallback: Agar thumbnail download na ho paye to direct text chala jaye
+                        # Fallback: Agar kisi wajah se thumbnail na mile to safe message chala jaye
                         promo_payload = {
                             "chat_id": int(PROMO_CHANNEL_ID),
                             "text": promo_text
@@ -225,7 +236,7 @@ def handle_telegram_update(update_dict):
                     
                     # Check API Response
                     if api_res and api_res.get("ok"):
-                        promo_status = "✅ Successfully Sent Thumbnail Photo to Promotion Channel!"
+                        promo_status = "✅ Successfully Sent Original Poster to Promotion Channel!"
                     else:
                         error_desc = api_res.get("description", "Unknown Error") if api_res else "No Response"
                         promo_status = f"❌ Failed! Reason: {error_desc}"
@@ -279,3 +290,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Bot is running via Webhook!")
+        
