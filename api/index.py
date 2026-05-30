@@ -16,7 +16,7 @@ MONGO_URI = os.environ.get("MONGO_URI")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Getvideo81827_bot")
 OWNER_ID = os.environ.get("OWNER_ID", "0")
 LOG_GROUP_ID = os.environ.get("LOG_GROUP_ID", "0") 
-# Promotion channel ID (Make sure it starts with -100 like -100xxxxxxxxx)
+# Promotion channel ID
 PROMO_CHANNEL_ID = os.environ.get("PROMO_CHANNEL_ID", "0") 
 
 # --- MongoDB Password Auto-Fix ---
@@ -37,14 +37,33 @@ db = db_client["telegram_bot_db"]
 videos_collection = db["saved_videos"]
 
 # --- टेलीग्राम API को सीधे बिना किसी लाइब्रेरी के मैसेज भेजने का सबसे पक्का तरीका ---
-def telegram_api_request(method, payload):
+def telegram_api_request(method, payload, files=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        if files:
+            response = requests.post(url, data=payload, files=files, timeout=20)
+        else:
+            response = requests.post(url, json=payload, timeout=10)
         return response.json()
     except Exception as e:
         print(f"Telegram API Error: {e}")
         return {"ok": False, "description": str(e)}
+
+# --- Thumbnail Download and Get Bytes ---
+def download_telegram_file(file_id):
+    try:
+        # File path nikalne ke liye getFile request
+        file_info = telegram_api_request("getFile", {"file_id": file_id})
+        if file_info and file_info.get("ok"):
+            file_path = file_info["result"]["file_path"]
+            download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+            # File ko direct memory me download karna bina disk pe save kiye
+            file_res = requests.get(download_url, timeout=15)
+            if file_res.status_code == 200:
+                return file_res.content
+    except Exception as e:
+        print(f"File Download Error: {e}")
+    return None
 
 def send_log_to_owner(text):
     if OWNER_ID != "0":
@@ -54,8 +73,6 @@ def send_log_to_owner(text):
 def delete_message_after_delay(chat_id, message_id, delay=15):
     def delete_action():
         telegram_api_request("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
-    
-    # 15 seconds ka timer background mein chalega bina server block kiye
     Timer(delay, delete_action).start()
 
 # --- Main Bot Logic ---
@@ -148,7 +165,7 @@ def handle_telegram_update(update_dict):
                         telegram_api_request("sendMessage", {"chat_id": int(LOG_GROUP_ID), "text": keyword_report, "parse_mode": "Markdown"})
                 return
 
-        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग)
+        # 2. चैनल पोस्ट को हैंडल करना (वीडियो ऑटो-सेविंग और रियल थंबनेल शेयरिंग)
         if "channel_post" in update_dict:
             channel_post = update_dict["channel_post"]
             if "video" in channel_post:
@@ -167,7 +184,7 @@ def handle_telegram_update(update_dict):
                 # MongoDB में डाटा स्टोर किया
                 videos_collection.update_one({"video_id": video_id}, {"$set": video_data}, upsert=True)
                 
-                # --- PROMOTION POST LOGIC WITH ERROR TRACKING ---
+                # --- PROMOTION POST LOGIC (REAL PHOTO UPLOAD) ---
                 promo_status = "⚠️ Not Attempted (PROMO_CHANNEL_ID not set)"
                 
                 if PROMO_CHANNEL_ID != "0" and PROMO_CHANNEL_ID != "":
@@ -178,35 +195,42 @@ def handle_telegram_update(update_dict):
                         f"https://t.me/new_movie_link_play"
                     )
                     
-                    # Thumbnail nikalne ki koshish
+                    # Thumbnail ki file_id nikalna
                     thumbnail_file_id = None
                     if "thumbnail" in video_obj:
                         thumbnail_file_id = video_obj["thumbnail"].get("file_id")
                     elif "thumb" in video_obj:
                         thumbnail_file_id = video_obj["thumb"].get("file_id")
                         
+                    photo_bytes = None
                     if thumbnail_file_id:
+                        # Telegram server se image bytes download karna (No local save)
+                        photo_bytes = download_telegram_file(thumbnail_file_id)
+
+                    if photo_bytes:
                         promo_payload = {
                             "chat_id": int(PROMO_CHANNEL_ID),
-                            "photo": thumbnail_file_id,
                             "caption": promo_text
                         }
-                        api_res = telegram_api_request("sendPhoto", promo_payload)
+                        files = {"photo": ("thumbnail.jpg", photo_bytes, "image/jpeg")}
+                        # Raw bytes ko direct multipart form-data ke roop me bhejna
+                        api_res = telegram_api_request("sendPhoto", promo_payload, files=files)
                     else:
+                        # Fallback: Agar thumbnail download na ho paye to direct text chala jaye
                         promo_payload = {
                             "chat_id": int(PROMO_CHANNEL_ID),
                             "text": promo_text
                         }
                         api_res = telegram_api_request("sendMessage", promo_payload)
                     
-                    # Check Telegram API response
+                    # Check API Response
                     if api_res and api_res.get("ok"):
-                        promo_status = "✅ Successfully Sent to Promotion Channel!"
+                        promo_status = "✅ Successfully Sent Thumbnail Photo to Promotion Channel!"
                     else:
-                        error_desc = api_res.get("description", "Unknown Error") if api_res else "No Response from API"
-                        promo_status = f"❌ Failed! Reason: {error_desc}\n📌 Check if Bot is Admin in Promo Channel and ID is correct ({PROMO_CHANNEL_ID})."
+                        error_desc = api_res.get("description", "Unknown Error") if api_res else "No Response"
+                        promo_status = f"❌ Failed! Reason: {error_desc}"
 
-                # Successful log message containing the promotion report
+                # Successful log message
                 log_message = (
                     f"📢 **बॉट लाइव लॉग रिपोर्ट** 📢\n\n"
                     f"✅ **डेटाबेस स्थिति:** सफलतापूर्वक सेव हुआ (MongoDB)\n"
